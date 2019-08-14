@@ -169,4 +169,4 @@ focus_pred_obs %>%
   theme_bw() +
   facet_wrap(~ seg_id_nat) +
   xlab('Observed (deg C)') + ylab('Predicted (deg C)')
-ggsave('out/pred_v_time.png', width=8, height=7)
+ggsave('out/pred_v_obs.png', width=8, height=7)
