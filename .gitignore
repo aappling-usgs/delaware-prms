@@ -1,0 +1,7 @@
+.httr-oauth
+.Rproj.user/
+*.Rproj
+
+data/
+notes/
+out/
