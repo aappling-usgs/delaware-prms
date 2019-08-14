@@ -20,6 +20,8 @@ example_day <- filter(stream_temps, date == stream_temps$date[200]) %>%
 example_day_sf <- left_join(del_sf, example_day, by='seg_id_nat')
 plot(example_day_sf['temperature'])
 
+#### Map seg_id_nat to NHDPlusV2 comid ####
+
 # Translate from seg_id_nat (unique reach IDs specific to the Geospatial Fabric)
 # to POI (POI_ID is identical to the NHDPlus COMI_ID attribute).
 #   The crosswalk from seg_id_nat to POI is at
@@ -76,11 +78,38 @@ plot(unmatched_segs['seg_id_nat'])
 length(setdiff(del_sf_POI$POI_ID, hu12_network_matches$POI_ID))
 filter(hu12_network_matches, !is.na(POI_ID), is.na(COMID))
 
+
+#### Delaware Basin boundary ####
+
+# Attempt to get a complete basin boundary for the Delaware using NLDI. This may
+# also be available in the Geospatial Fabric
+del_pour_points <- c(
+  '020402070203', '020402050802', '020402050803',
+  '020402060105', '020402060602', '020402070102',
+  '020402060505', '020402070602', '020402070102') # , 
+# stalls or very slow on '020402070405', '020402070505', '020402070304'
+# rejects '020402070205', '020402060507' 'Cannot open data source'
+# no PRMS matches: '020402070202'
+del_subbasins <- lapply(del_pour_points, function(dpp) {
+  message(dpp)
+  sf::read_sf(sprintf('https://cida.usgs.gov/nldi/huc12pp/%s/basin', dpp)) %>%
+    st_transform(crs=st_crs(del_prms))
+})
+plot(st_geometry(del_prms), col='navyblue', add=F)
+del_basin <- del_subbasins[[1]]
+plot(st_geometry(del_basin), col=NA, border='red', add=T)
+for(dsb in del_subbasins[-1]) {
+  del_basin <- st_union(del_basin, dsb)
+  plot(st_geometry(dsb), col=NA, border='red', add=T)
+}
+plot(st_geometry(del_basin), col=NA, border='seagreen1', add=T)
+
+
+#### Other NHDPlusV2 stuff ####
+
 # Download NHDPlusV2 from
 # ftp://www.horizon-systems.com/NHDPlus/NHDPlusV21/Data/NationalData/NHDPlusV21_NationalData_Seamless_Geodatabase_Lower48_07.7z
-nhdplusv2 <- 
-
-#### DON'T NEET THIS ####
+#nhdplusv2 <- ...
 
 # here's a V1-V2 crosswalk. do we need this? takes a while to load b/c 2.6 million rows, 10 cols. comes from
 # the NHDPlusV2 site (http://www.horizon-systems.com/NHDPlus/V2NationalData.php)
