@@ -49,6 +49,10 @@ del_sf_POI %>%
   filter(POI_ID == one_shared_POI) %>%
   select(seg_id_nat) %>%
   plot()
+del_sf_POI %>%
+  filter(POI_ID == one_shared_POI) %>%
+  select(POI_ID) %>%
+  plot()
 gf_segments %>% 
   filter(POI_ID == one_shared_POI) %>%
   select(seg_id_nat) %>%
@@ -62,22 +66,31 @@ gf_segments %>%
 # Point of Interest that can be used as a source of streamflow for the HU12 in
 # question."
 hu12_network_matches <- readr::read_tsv('data/MappingFrom12Di/hu12_network_matches.tsv')
-del_sf_V2 <- left_join(shared_POIs, hu12_network_matches, by='POI_ID') %>%
+del_sf_V2 <- left_join(del_sf_POI, hu12_network_matches, by='POI_ID') %>%
   mutate(unmatched = factor(is.na(COMID)))
+nrow(filter(del_sf_V2, is.na(POI_ID))) # 0
 nrow(filter(del_sf_V2, is.na(HUC_12))) # 220
-nrow(filter(del_sf_V2, is.na(COMID))) # 220
+nrow(filter(del_sf_V2, is.na(COMID))) # 220 non-matches
+nrow(filter(del_sf_V2, !is.na(COMID))) # 279 good matches
+filter(del_sf_V2, !is.na(COMID)) %>% pull(POI_ID) %>% unique() %>% length() # 226 unique good matches
 all.equal(filter(del_sf_V2, is.na(COMID))$POI_ID, filter(del_sf_V2, is.na(HUC_12))$POI_ID) # same ones missing
 
 unmatched_segs <- select(del_sf_V2, seg_id_nat, POI_ID, COMID, HUC_12) %>%
   filter(is.na(COMID))
 par(mar=c(1,0,1.2,1))
-par()
 plot(del_sf_V2['unmatched'])
 plot(unmatched_segs['seg_id_nat'])
 
-length(setdiff(del_sf_POI$POI_ID, hu12_network_matches$POI_ID))
-filter(hu12_network_matches, !is.na(POI_ID), is.na(COMID))
+length(unique(del_sf_POI$POI_ID)) # 436 unique POI_IDs in delaware. every PRMS reach gets a non-NA POI_ID.
+length(setdiff(del_sf_POI$POI_ID, hu12_network_matches$POI_ID)) # 210 of the delaware POI_IDs aren't present in hu12_network_matches
+nrow(hu12_network_matches) # 83508 rows in the crosswalk
+nrow(filter(hu12_network_matches, !is.na(POI_ID))) # 49287 of those rows have a non-NA POI_ID, i.e. are potential amtches with the delaware linework
+nrow(filter(hu12_network_matches, !is.na(POI_ID), is.na(COMID))) # 0: every row that has a POI_ID also has a non-NA COMID
+length(intersect(del_sf_POI$POI_ID, hu12_network_matches$POI_ID)) # 226 
+length(unique(intersect(del_sf_POI$POI_ID, hu12_network_matches$POI_ID))) # 226 unique matches expected (as confirmed above)
 
+# we can't just assume that COMID == POI_ID
+hu12_network_matches %>% filter(COMID != POI_ID) # 33580 rows
 
 #### Delaware Basin boundary ####
 

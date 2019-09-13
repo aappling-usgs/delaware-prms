@@ -49,7 +49,7 @@ plot(crosswalk_site_reach['seg_id_nat'], reset=FALSE)
 plot(reach_points['seg_id_nat'], pch=20, add=T)
 dev.off()
 
-# plot 
+# plot histogram of distances from site points to matched reaches
 png('out/dist_to_reach_hist.png', width=480, height=400)
 ggplot(site_points, aes(x=dist_to_reach_km)) + geom_histogram(binwidth=1)
 dev.off()
