@@ -20,7 +20,7 @@ gf_points <- sf::read_sf('data/GeospatialFabric_National.gdb', layer='POIs') %>%
 gf_reaches %>% pull(region) %>% table()
 # (2a) reaches usually have a point with the same id at their downstream end
 # (2b) reaches don't necessarily connect at their endpoints
-ggplot(filter(gf_reaches, seg_id %in% c(1,2,8,3))) + geom_sf(aes(color=factor(seg_id))) +
+ggplot(mutate(filter(gf_reaches, seg_id %in% c(1,2,8,3)), SegmentID=factor(seg_id))) + geom_sf(aes(color=SegmentID)) +
   geom_sf(data=filter(gf_points, seg_id %in% c(1,2,8,3)), aes(color=factor(seg_id))) +
   theme_bw()
 filter(gf_reaches, seg_id %in% c(1,2,3,8) | to_seg %in% c(1,2,3,8)) %>% select(seg_id, to_seg)
@@ -33,11 +33,14 @@ ggplot(filter(mutate(gf_reaches, highlight = seg_id %in% c(155,156,157)),highlig
 filter(gf_reaches, seg_id %in% c(155,156,157)) %>% select(seg_id, to_seg)
 filter(gf_points, seg_id %in% c(155,156,157))
 # (4) reach 357 claims to enter reach 359, but the lines sure don't make that look plausible
-ggplot(filter(mutate(gf_reaches, highlight = seg_id %in% c(355,357,359)),seg_id > 300, seg_id < 400)) + geom_sf(aes(color=factor(ifelse(highlight, seg_id, NA)))) + theme_bw()
+ggplot(filter(mutate(gf_reaches, highlight = seg_id %in% c(355,357,359), SegmentID=factor(ifelse(highlight, seg_id, NA))),seg_id > 300, seg_id < 400)) +
+  geom_sf(aes(color=SegmentID)) + theme_bw()
 ggplot(filter(mutate(gf_reaches, highlight = seg_id %in% c(355,357,359)),highlight)) + geom_sf(aes(color=factor(seg_id))) +
   geom_sf(data=filter(mutate(gf_points, highlight = seg_id %in% c(355,357,359)), highlight), aes(color=factor(seg_id))) +
   theme_bw()
 filter(gf_reaches, seg_id == 357)
+filter(gf_reaches, to_seg == 357) # 360
+filter(gf_reaches, to_seg == 360) # none
 ggplot(filter(gf_reaches, seg_id %in% c(355,357,359)))
 ggplot(filter(reaches_bounded, seg_id %in% c(355, 357, 359))) + geom_sf(aes(color=factor(seg_id))) + geom_sf(data=reach_points, aes(color=factor(pt_seg)))
 
@@ -189,7 +192,22 @@ reach_net_info <- lapply(unique(reaches_bounded$seg_id), function(segid) {
     return(list(vertices=net_vertices_final, edges=net_edges_final))  
   })
 
-reach_net_vertices <- do.call(rbind, lapply(reach_net_info, `[[`, 'vertices'))
+# create vertex table from reach_net_info, then remove duplicates and
+# consolidate info in starts_subseg and ends_subseg
+reach_net_vertices <- do.call(rbind, lapply(reach_net_info, `[[`, 'vertices')) %>%
+  mutate(
+    X = st_coordinates(geometry)[,'X'],
+    Y = st_coordinates(geometry)[,'Y'],
+    XY = sprintf('%0.5f,%0.5f', X, Y)) %>%
+  group_by(XY) %>% # can't group by geometry, but this yields the same number of unique points
+  summarize(
+    point_ids = paste(sort(unique(unlist(strsplit(point_ids, ';')))), collapse=';'),
+    starts_subseg = paste(unique(na.exclude(starts_subseg)), collapse=';'), # should only be 0 or 1 per row, but this paste() turns 0 into ''
+    ends_subseg = paste(sort(unique(na.exclude(ends_subseg))), collapse=';'))
+
+# Edge table needs more infor on to_subseg that can only be acquired now that we
+# have all the subsegs prepared. For each subseg, find out which seg it feeds
+# into and identify the specific subseg it feeds to
 reach_net_edges <- do.call(rbind, lapply(reach_net_info, `[[`, 'edges'))
 for(e in reach_net_edges$subseg_id) {
   reach <- filter(reach_net_edges, subseg_id == e)
@@ -210,94 +228,132 @@ for(e in reach_net_edges$subseg_id) {
     reach_net_edges[which(reach_net_edges$subseg_id == e), 'to_subseg'] <- to_subseg_id
   }
 }
+# Revise and attach point information
+reach_net_edges <- reach_net_edges %>%
+  group_by(subseg_id) %>%
+  mutate(
+    # no need to revise starts_with_pts because each reach already knows about all its parents
+    # starts_with_pts = paste(grep(sprintf('(^|;)(%s)(;|$)', strsplit(starts_with_pts, ';')[[1]][1]), reach_net_vertices$point_ids, value=TRUE), collapse=';'),
+    ends_with_pts = paste(grep(sprintf('(^|;)(%s)(;|$)', ends_with_pts), reach_net_vertices$point_ids, value=TRUE), collapse=';')) %>%
+  ungroup() %>%
+  rename(start_pt=starts_with_pts, end_pt=ends_with_pts)# it's really just one point at each end of each subseg
 
+# inspect
+grep(';', reach_net_vertices$starts_subseg) # each point starts either 0 or 1 segments, never more
+table(reach_net_edges$subseg_updown) # always left=upstream, right=downstream. nice!
+all(reach_net_edges$start_pt %in% reach_net_vertices$point_ids) # TRUE
+all(reach_net_edges$end_pt %in% reach_net_vertices$point_ids) # TRUE
 
-
-
-
-
-
-
-# Augment reach info with connections to the upstream reaches. In each row of
+# For plotting's sake, augment reach info with connections to the upstream reaches. In each row of
 # reaches_updown (an edge in the graph), the outlet (pour point) of from_seg is the upstream point, seg_id is used as
 # the ID of the segment's downstream-most point, and the segment
 # identified by seg_id (between from_seg and seg_id) has length seg_length.
-reach_key_info <- reaches_bounded %>% select(seg_id, to_seg, which_end_up, up_point, down_point)
+reach_key_info <- reach_net_edges %>% select(subseg_id, to_subseg, subseg_length)
 reaches_updown <- reach_key_info %>%
-  rename(next_seg = to_seg) %>% # to_seg will just be confusing in a minute, but we need it to decide whether something is an outlet, so rename it
+  rename(next_subseg = to_subseg) %>% # to_seg will just be confusing in a minute, but we need it to decide whether something is an outlet, so rename it
   #mutate(to_seg = seg_id) %>% # add a column to clarify that the seg_id and the to_pt share an ID
   left_join(
-    reach_key_info %>% st_set_geometry(NULL) %>% select(from_seg = seg_id, seg_id = to_seg),
-    by = 'seg_id')
-
+    reach_key_info %>% st_set_geometry(NULL) %>% select(prev_subseg = subseg_id, subseg_id = to_subseg),
+    by = 'subseg_id')
 # plot the original reaches by their position
 reaches_updown %>%
-  mutate(position = ifelse(is.na(next_seg), 'outlet', ifelse(is.na(from_seg), 'headwater', 'middle'))) %>%
+  mutate(position = ifelse(is.na(next_subseg), 'outlet', ifelse(is.na(prev_subseg), 'headwater', 'middle'))) %>%
   ggplot() + geom_sf(aes(color=position), fill=NA) + theme_bw()
 
+# combine reach_net_edges and reach_net_vertices into a final gloriously complete list for the sake of export
+reach_net <- list(
+  edges = reach_net_edges,
+  vertices = reach_net_vertices)
+saveRDS(reach_net, 'out/reach_network.rds')
 
-# identify the points at the upstream and downstream ends of each reach
-reach_endpoints <- lapply(seq_len(nrow(gf_reaches)-454), function(i) {
-  reach <- gf_reaches[i,]
-  end_points <- st_cast(sf::st_geometry(reach), "POINT")
-  head_point <- head(end_points, 1)
-  tail_point <- tail(end_points, 1)
-
-  out_point <- filter(gf_points, poi_gage_segment == reach$seg_id)
-  out_snap <- sf::st_snap(out_point, reach, tol=1e-9)
-  sf::st_geometry(out_snap) == tail_point
-  
-  %>% {.[1,length(.)]}
-  parts <- st_collection_extract(lwgeom::st_split(sf::st_geometry(reach_3), sf::st_geometry(site1_snap3)),"LINESTRING")
-  in_point <- 
-  print(reach)
-})
-
-
-
-# Simplify the vertex information so it makes sense relative to the edge information (reaches_updown)
-points_updown <- gf_points %>%
-  select(pt_id = poi_gage_segment)
-ggplot(reaches_updown) + geom_sf(aes(color=seg_id), size=0.5) + geom_sf(data=points_updown, aes(color=pt_id), size=1) + theme_bw()
+# visualize some more
+ggplot(mutate(reach_net$edges, length_m=units::drop_units(subseg_length))) +
+  geom_sf(aes(color=length_m)) +
+  theme_bw()
 
 # Use igraph to compute a matrix of distances (in meters)
-graph <- reaches_updown %>%
+graph <- reach_net$edges %>%
   st_set_geometry(NULL) %>%
-  select(from_pt, to_pt, seg_id, seg_length) %>%
+  select(start_pt, end_pt, subseg_id, subseg_length) %>%
   igraph::graph_from_data_frame(directed = TRUE) # df must contain "a symbolic edge list in the first two columns. Additional columns are considered as edge attributes"
-dists_symmetric <- distances(graph, weights = edge.attributes(graph)$seg_length, mode='all') # symmetric
-dists_downstream <- distances(graph, weights = edge.attributes(graph)$seg_length, mode='out') # shortest paths FROM each vertex.
-dists_upstream <- distances(graph, weights = edge.attributes(graph)$seg_length, mode='in') # shortest paths TO each vertex (flowing upstream only)
+dists_complete <- distances(graph, weights = edge.attributes(graph)$subseg_length, mode='all') # symmetric
+dists_downstream <- distances(graph, weights = edge.attributes(graph)$subseg_length, mode='out') # shortest paths FROM each vertex.
+dists_upstream <- distances(graph, weights = edge.attributes(graph)$subseg_length, mode='in') # shortest paths TO each vertex (flowing upstream only)
+dists_updown <- dists_downstream
+for(i in 1:nrow(dists_downstream)) {
+  for(j in 1:ncol(dists_downstream)) {
+    if(is.infinite(dists_downstream[i,j]) & !is.infinite(dists_upstream[i,j])) {
+      dists_updown[i,j] <- -dists_upstream[i,j]
+    }
+  }
+}
 
-# example: from_pt=2 flows to to_pt=8 with reach length = pull(filter(reaches_updown, seg_id=='8'), seg_length) = 19728 m
-# dists_downstream['3','4'] = 1914
+dist_heatmap <- function(dat, title, save_as) {
+  dat_df <- as_tibble(dat) %>%
+    mutate(start_pt=rownames(dat)) %>%
+    gather('end_pt', 'dist_m', -start_pt) %>%
+    mutate(
+      start_pt = sapply(strsplit(start_pt, ';'), function(splits) splits[1]),
+      end_pt = sapply(strsplit(end_pt, ';'), function(splits) splits[1]))
+  point_levels <- unique(c(dat_df$start_pt, dat_df$end_pt))
+  point_order <- order(sapply(strsplit(point_levels, '(u|d)(;)*'), function(splits) as.integer(splits[1])))
+  point_levels <- point_levels[point_order]
+  dat_df <- dat_df %>%
+    mutate(
+      start_pt = ordered(start_pt, levels=rev(point_levels)),
+      end_pt = ordered(end_pt, levels=point_levels))
+  g <- ggplot(dat_df, aes(y=start_pt, x=end_pt)) + 
+    geom_tile(aes(fill = dist_m), color = NA) +
+    scale_fill_gradient('Distance (m)', low = "#ffffff", high = "#396a93", na.value='#192f41') +
+    scale_x_discrete(position = 'top') +
+    xlab('End Point') + ylab('Start Point') +
+    theme(panel.grid = element_blank(),
+     axis.ticks = element_blank(),
+     axis.text = element_text(size = 9, color='grey50'),
+     axis.text.x = element_text(angle = 90, hjust = 0)) +
+    coord_equal() +
+    ggtitle(title)
+  if(!missing(save_as)) {
+    ggsave(save_as, plot=g, width=11, height=10)
+  }
+  return(g)
+}
+dist_heatmap(dists_downstream[1:100,1:100], 'Downstream', 'out/dists_downstream.png')
+dist_heatmap(dists_upstream[1:100,1:100], 'Upstream', 'out/dists_upstream.png')
+dist_heatmap(dists_complete[1:100,1:100], 'Complete', 'out/dists_complete.png')
+dist_heatmap(dists_updown[1:100,1:100], 'Updown', 'out/dists_updown.png')
+
+round(dists_downstream[1:6,1:6])
+round(dists_upstream[1:6,1:6])
+round(dists_complete[1:6,1:6])
+round(dists_updown[1:6,1:6])
+# example: from_pt=2u flows to to_pt=8u with reach length = pull(filter(reach_net$edges, subseg_id=='8_1'), subseg_length) = 17677 m
+# dists_downstream['3d','4d'] = 1914
 # dists_downstream['4','3'] = Inf
 # dists_upstream['3','4'] = Inf
 # dists_upstream['4','3'] = 1914
 # dists_symmetric['3','4'] = dists_symmetric['4','3'] = 1914
 
 
-ggplot(mutate(reaches_updown, example=seg_id %in% c('8'))) + geom_sf(aes(color=example), fill=NA) + theme_bw()
-ggplot(mutate(reaches_updown, example=seg_id %in% c('2'))) + geom_sf(aes(color=example), fill=NA) + theme_bw()
-ggplot(mutate(filter(reaches_updown, seg_id %in% c('2','3','8')), example=seg_id %in% c('3'))) + geom_sf(aes(color=example), fill=NA) + theme_bw()
-
-# example: 
-reaches_updown %>% filter(position=='headwater')
-ggplot(mutate(reaches_updown, example=seg_id %in% c('1','7'))) + geom_sf(aes(color=example), fill=NA) + theme_bw()
-
-
-site_1 <- filter(points_updown, pt_id == 1)
-reach_3 <- filter(gf_reaches, seg_id == 3)
-site1_snap3 <- st_snap(site_1, reach_3, tol=1e-9)
-sf::st_geometry(reach_3)
-parts <- st_collection_extract(lwgeom::st_split(sf::st_geometry(reach_3), sf::st_geometry(site1_snap3)),"LINESTRING")
-
-site_2 <- filter(points_updown, pt_id == 2)
-reach_8 <- filter(reaches_updown, seg_id == 8)
-site_snap <- st_snap(site_2, reach_8, tol=1e-9)
-parts <- st_collection_extract(lwgeom::st_split(sf::st_geometry(reach_8), sf::st_geometry(site_snap)),"LINESTRING")
-
-dists_downstream %>%
-  as_tibble() %>%
-  rownames_to_column('')
-mutate(reaches_updown, )       
+# visualize some more more
+plot_dists <- function(start_pt, dist_mat, net, title, save_as) {
+  dists_from_start <- dist_mat[start_pt,]/1000
+  pt_dists <- mutate(net$vertices, dist_from_start=dists_from_start[point_ids]) %>%
+    filter(is.finite(dist_from_start))
+  g <- ggplot(net$edges) +
+    geom_sf(color='lightgrey') +
+    geom_sf(data=pt_dists, aes(color=dist_from_start)) +
+    geom_sf(data=filter(net$vertices, point_ids==start_pt), color='red') +
+    theme_bw() +
+    scale_color_continuous('Distance to\nred point (km)') +
+    ggtitle(title)
+  if(!missing(save_as)) {
+    ggsave(save_as, plot=g, width=5, height=7)
+  }
+  return(g)
+}
+pt <- '850d;851d;853u'
+plot_dists(pt, dists_downstream, reach_net, 'Downstream', 'out/map_dists_downstream.png')
+plot_dists(pt, dists_upstream, reach_net, 'Upstream', 'out/map_dists_upstream.png')
+plot_dists(pt, dists_complete, reach_net, 'Complete Network', 'out/map_dists_complete.png')
+plot_dists(pt, dists_updown, reach_net, 'Upstream or Downstream', 'out/map_dists_updown.png')
