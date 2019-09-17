@@ -32,6 +32,17 @@ ggplot(filter(mutate(gf_reaches, highlight = seg_id %in% c(155,156,157)),highlig
   theme_bw()
 filter(gf_reaches, seg_id %in% c(155,156,157)) %>% select(seg_id, to_seg)
 filter(gf_points, seg_id %in% c(155,156,157))
+# (4) reach 357 claims to enter reach 359, but the lines sure don't make that look plausible
+ggplot(filter(mutate(gf_reaches, highlight = seg_id %in% c(355,357,359)),seg_id > 300, seg_id < 400)) + geom_sf(aes(color=factor(ifelse(highlight, seg_id, NA)))) + theme_bw()
+ggplot(filter(mutate(gf_reaches, highlight = seg_id %in% c(355,357,359)),highlight)) + geom_sf(aes(color=factor(seg_id))) +
+  geom_sf(data=filter(mutate(gf_points, highlight = seg_id %in% c(355,357,359)), highlight), aes(color=factor(seg_id))) +
+  theme_bw()
+filter(gf_reaches, seg_id == 357)
+ggplot(filter(gf_reaches, seg_id %in% c(355,357,359)))
+ggplot(filter(reaches_bounded, seg_id %in% c(355, 357, 359))) + geom_sf(aes(color=factor(seg_id))) + geom_sf(data=reach_points, aes(color=factor(pt_seg)))
+
+# Modify reaches according to lessons learned
+gf_reaches[gf_reaches$seg_id == 357, 'to_seg'] <- NA # there's a huge gap between the two reaches
 
 # Augment gf_reaches with all end points of all reaches. I initially tried to
 # find points in gf_points, but at least one doesn't exist (the outlet to 155)
@@ -60,26 +71,9 @@ reaches_bounded <- reaches_bounded %>%
     down_point = purrr::map2(end_points, which_end_up, function(endpoints, whichendup) { endpoints[[c(1,2)[-whichendup]]] })) %>%
   select(-end_points)
 
-# Augment reach info with connections to the upstream reaches. In each row of
-# reaches_updown (an edge in the graph), the outlet (pour point) of from_seg is the upstream point, seg_id is used as
-# the ID of the segment's downstream-most point, and the segment
-# identified by seg_id (between from_seg and seg_id) has length seg_length.
-reach_key_info <- reaches_bounded %>% select(seg_id, to_seg, which_end_up, up_point, down_point)
-reaches_updown <- reach_key_info %>%
-  rename(next_seg = to_seg) %>% # to_seg will just be confusing in a minute, but we need it to decide whether something is an outlet, so rename it
-  mutate(to_seg = seg_id) %>% # add a column to clarify that the seg_id and the to_pt share an ID
-  left_join(
-    reach_key_info %>% st_set_geometry(NULL) %>% select(from_seg = seg_id, seg_id = to_seg),
-    by = 'seg_id')
-
-# plot the original reaches by their position
-reaches_updown %>%
-  mutate(position = ifelse(is.na(next_seg), 'outlet', ifelse(is.na(from_seg), 'headwater', 'middle'))) %>%
-  ggplot() + geom_sf(aes(color=position), fill=NA) + theme_bw()
-
 # split reaches into segments where necessary so that every pair of points is
 # connected by a segment, and no segments pass through and beyond a point
-reach_net_info <- lapply(unique(reaches_updown$seg_id), function(segid) {
+reach_net_info <- lapply(unique(reaches_bounded$seg_id), function(segid) {
     reach <- filter(reaches_bounded, seg_id == segid)
     from_reaches <- filter(reaches_bounded, to_seg == reach$seg_id)
     
@@ -179,27 +173,68 @@ reach_net_info <- lapply(unique(reaches_updown$seg_id), function(segid) {
       mutate(
         starts_with_pts = paste(sort(point_id[pt_subseg_flowend=='up']), collapse=';'),
         ends_with_pts = paste(sort(point_id[pt_subseg_flowend=='down']), collapse=';'),
-        from_segs = {
-          try_from <- paste(sort(pt_seg[pt_seg != segid]), collapse=';')
-          if(length(try_from) > 0) try_from else NA}
+        from_segs = paste(sort(pt_seg[pt_seg != segid & pt_subseg_flowend=='up']), collapse=';')
       ) %>%
       ungroup()
     first_dups <- sapply(unique(net_edges_dups$subseg_id), function(ssid) which(net_edges_dups$subseg_id == ssid)[1])
     net_edges_final <- net_edges_dups %>%
       slice(first_dups) %>%
       mutate(
-        subseg_id_num = as.integer(substring(subseg_id, 3)),
+        subseg_id_num = as.integer(sapply(strsplit(subseg_id, '_'), `[`, 2)),
         to_seg = ifelse(subseg_id_num == max(subseg_id_num), reach$to_seg, NA),
-        to_subseg = c(subseg_id[-1], NA),
+        to_subseg = c(subseg_id[-1], ''),
         subseg_length = st_length(geometry)) %>%
       select(subseg_id, subseg_seg, subseg_updown, subseg_length, starts_with_pts, ends_with_pts, from_segs, to_seg, to_subseg, geometry)
-    
   
     return(list(vertices=net_vertices_final, edges=net_edges_final))  
   })
 
 reach_net_vertices <- do.call(rbind, lapply(reach_net_info, `[[`, 'vertices'))
 reach_net_edges <- do.call(rbind, lapply(reach_net_info, `[[`, 'edges'))
+for(e in reach_net_edges$subseg_id) {
+  reach <- filter(reach_net_edges, subseg_id == e)
+  if(reach$to_subseg == '') {
+    if(!is.na(reach$to_seg)) {
+      to_subseg <- filter(
+        reach_net_edges,
+        reach$to_seg == subseg_seg,
+        grepl(sprintf('(^|;)%d(;|$)',reach$subseg_seg), from_segs))
+      if(nrow(to_subseg) != 1) {
+        print(to_subseg)
+        stop(sprintf("found no to_subseg for %s, to_seg=%d", e, reach$to_seg))
+      }
+      to_subseg_id <- to_subseg$subseg_id
+    } else {
+      to_subseg_id <- NA
+    }
+    reach_net_edges[which(reach_net_edges$subseg_id == e), 'to_subseg'] <- to_subseg_id
+  }
+}
+
+
+
+
+
+
+
+
+# Augment reach info with connections to the upstream reaches. In each row of
+# reaches_updown (an edge in the graph), the outlet (pour point) of from_seg is the upstream point, seg_id is used as
+# the ID of the segment's downstream-most point, and the segment
+# identified by seg_id (between from_seg and seg_id) has length seg_length.
+reach_key_info <- reaches_bounded %>% select(seg_id, to_seg, which_end_up, up_point, down_point)
+reaches_updown <- reach_key_info %>%
+  rename(next_seg = to_seg) %>% # to_seg will just be confusing in a minute, but we need it to decide whether something is an outlet, so rename it
+  #mutate(to_seg = seg_id) %>% # add a column to clarify that the seg_id and the to_pt share an ID
+  left_join(
+    reach_key_info %>% st_set_geometry(NULL) %>% select(from_seg = seg_id, seg_id = to_seg),
+    by = 'seg_id')
+
+# plot the original reaches by their position
+reaches_updown %>%
+  mutate(position = ifelse(is.na(next_seg), 'outlet', ifelse(is.na(from_seg), 'headwater', 'middle'))) %>%
+  ggplot() + geom_sf(aes(color=position), fill=NA) + theme_bw()
+
 
 # identify the points at the upstream and downstream ends of each reach
 reach_endpoints <- lapply(seq_len(nrow(gf_reaches)-454), function(i) {
