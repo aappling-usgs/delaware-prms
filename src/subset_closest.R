@@ -15,30 +15,6 @@ library(sf)
 #' sites <- drb_sites # build drb_sites in map_sites_to_reaches.R
 subset_closest <- function(reaches, sites){
   
-  # # narrow the search space by doing a simple "within distance" query for each site
-  # system.time({ # 22 secs for all 5024 sites and 459 reaches in DRB
-  #   # use the max segment length as an upper bound on acceptable distance between site and reach
-  #   neighbors <- sf::st_is_within_distance(sites, reaches, max(reaches$subseg_length))
-  # })
-  # n_neighbors <- sapply(neighbors, length) # yields between 6 and 114 matches per site
-  # summary(n_neighbors)
-  
-  # system.time({ # 22 secs for all 5024 sites and 459 reaches in DRB
-  #   dists <- sf::st_distance(sites, reaches)
-  #   # nngeo::st_nn() is also an option - it returns nearest neighbors - but it
-  #   # uses sf::st_distance and requires an additional package, so skip it
-  # })
-  # site_reach_matches <- sites %>%
-  #   mutate(
-  #     min_dist_id = apply(dists, MARGIN=1, function(dists_to_reach) {
-  #       which.min(dists_to_reach)
-  #     }),
-  #     nearest_subseg = reaches$subseg_id[min_dist_id],
-  #     dist_to_subseg = dists[matrix(c(1:n(), min_dist_id), ncol=2, byrow=FALSE)]
-  #   ) %>%
-  #   select(-min_dist_id) # not useful now that we have nearest_subseg adn dist_to_subseg
-  # plot(density(site_reach_matches$dist_to_subseg))
-  
   system.time({ # 1.3 seconds. see https://gis.stackexchange.com/questions/288570/find-nearest-point-along-polyline-using-sf-package-in-r
     # Locate nearest feature (by nearest point within that feature), preferring
     # the feature whose downstream point is closest
@@ -55,16 +31,22 @@ subset_closest <- function(reaches, sites){
     
     sites$subseg_id <- nearest_subseg$subseg_id
     
+    # Goal: Match each site point to an edge (reach) and its downstream vertex (outlet)
     # Locate the nearest endpoint and the nearest reach, then:
-    #   a) if the nearest reach is closer than the nearest point, use the nearest reach and locate the closest point on that reach
-    #   b) if the nearest reach and nearest point are the same distance, use the closest reach upstream of that nearest point
-    #   c) if the nearest reach is farther than the nearest point, that's cray-cray so throw an error
+    #   a) if the nearest reach is closer than the nearest point, use the nearest reach
+    #      and locate the closest point on that reach, then see below
+    #   b) if the nearest reach and nearest point are the same distance, use the nearest
+    #      point and the closest reach upstream of that nearest point
+    #   c) if the nearest reach is farther than the nearest point, that's cray-cray so 
+    #      throw an error
     # In situation (a), once you have the nearest reach and the nearest point on that reach:
     #   1) if the nearest point is downstream, then use that point
     #   2) else if the nearest point is upstream, then:
-    #     i) if the upstream reach does not fork, match to the upstream point and the reach it drains
+    #     i) if the upstream reach does not fork, match to the upstream point and the reach
+    #        it drains
     #     ii) else if the upstream reach does fork, then:
-    #       A) if the upstream point is >4x closer than the downstream point, match to the upstream point and the closest reach it drains
+    #       A) if the upstream point is >4x closer than the downstream point, match to the
+    #          upstream point and the closest reach it drains
     #       B) else match to the downstream point and the matched reach
     
   })
