@@ -357,3 +357,11 @@ plot_dists(pt, dists_downstream, reach_net, 'Downstream', 'out/map_dists_downstr
 plot_dists(pt, dists_upstream, reach_net, 'Upstream', 'out/map_dists_upstream.png')
 plot_dists(pt, dists_complete, reach_net, 'Complete Network', 'out/map_dists_complete.png')
 plot_dists(pt, dists_updown, reach_net, 'Upstream or Downstream', 'out/map_dists_updown.png')
+
+# save distance matrices in numpy format
+np <- reticulate::import('numpy')
+np$savez_compressed(file='out/dists.npz', downstream=dists_downstream, upstream=dists_upstream, complete=dists_complete, updown=dists_updown)
+# R access examples:
+# loaded <- np$load('out/dists.npz')
+# loaded$files
+# loaded$f[['updown']]
