@@ -44,119 +44,121 @@ subset_closest <- function(reaches, sites){
   system.time({ # 1.7 seconds
     # Locate the nearest endpoint=vertex and the nearest reach (by nearest point within that reach)
     nearest_subseg <- reaches[sf::st_nearest_feature(sites, reaches), ]
-    bird_dist_to_subseg <- st_length(st_nearest_points(sites, nearest_subseg, pairwise=TRUE))
+    bird_dist_to_subseg_m <- st_length(st_nearest_points(sites, nearest_subseg, pairwise=TRUE))
     nearest_vertex <- vertices[sf::st_nearest_feature(sites, vertices), ]
-    bird_dist_to_vertex <- st_length(st_nearest_points(sites, nearest_vertex, pairwise=TRUE))
+    bird_dist_to_vertex_m <- st_length(st_nearest_points(sites, nearest_vertex, pairwise=TRUE))
     nearest <- tibble(
       site_id = sites$site_id,
-      nearest_subseg_id = nearest_subseg$subseg_id,
-      bird_dist_to_subseg = bird_dist_to_subseg,
-      nearest_point_ids = nearest_vertex$point_ids,
-      bird_dist_to_vertex = bird_dist_to_vertex
+      nearest_subseg = nearest_subseg, # creates a cool horizontally nested tibble structure with multiple geometries
+      # nearest_subseg_id = nearest_subseg$subseg_id,
+      bird_dist_to_subseg_m = bird_dist_to_subseg_m %>% units::drop_units(),
+      nearest_vertex = nearest_vertex, # creates a cool horizontally nested tibble structure with multiple geometries
+      # nearest_point_ids = nearest_vertex$point_ids,
+      bird_dist_to_vertex_m = bird_dist_to_vertex_m %>% units::drop_units()
     ) %>%
       st_set_geometry(st_geometry(sites))
   })
   
-  #' In situation (a), once you have the nearest reach and the nearest point on that reach:
-  #'   1) if the nearest point is downstream, then use that point
-  #'   2) else if the nearest point is upstream, then:
-  #'     i) if the upstream reach does not fork, match to the upstream point and the reach
-  #'        it drains
-  #'     ii) else if the upstream reach does fork, then:
-  #'       A) if the upstream point is >4x closer than the downstream point, match to the
-  #'          upstream point and the closest reach it drains
-  #'       B) else match to the downstream point and the matched reach 
+  # For each site, use nested conditionals to navigate a set of possibilities
+  # for what the best site-reach match is. See notes below
   sites_matched <- nearest %>%
-    mutate(subseg_id = NA, point_ids = NA) %>%
-    slice(1:5) %>%
-    split(.$site_id) %>%
-    map_dfr(function(site) {
-      message(site$site_id)
-      if(abs(site$bird_dist_to_subseg - site$bird_dist_to_vertex) < units::set_units(1, 'm')) {
-        # The site point is as close to a reach vertex as to any other point on
-        # a reach. This occurs in 292 cases for tol=1m (and 355 cases for
-        # tol=10m, 281 for 0.1m, 277 for 0.01m, 276 for 0.001 down to 1e-12)
-        
-        # use the matched point
-        site$point_ids <- site$nearest_point_ids
-        
-        # use the nearest reach of those that drain to the matched point
-        upstream_reaches <- filter(reaches, end_pt == site$point_ids)
-        closest_upstream_subseg <- upstream_reaches[st_nearest_feature(site, upstream_reaches),]
-        site$subseg_id <- closest_upstream_subseg$subseg_id
-        
-        # revise the distances
-        site$bird_dist_to_subseg <- st_distance(site, closest_upstream_subseg)
-        site$fish_dist_to_outlet <- units::set_units(0, 'm') # or close enough, anyway
-        
-      } else if(site$bird_dist_to_subseg < site$bird_dist_to_vertex) {
+    slice(1:5) %>% # for testing
+    split(.$site_id) %>% # rowwise
+    purrr:::map_dfr(function(site_sf) {
+      message(site_sf$site_id)
+      site <- tibble(site_id = site_sf$site_id) # initialize a new non-sf tibble to return
+      # equidistance_tolerance_m <- 1
+      # if(abs(site_sf$bird_dist_to_subseg_m - site_sf$bird_dist_to_vertex_m) < equidistance_tolerance_m) {
+      #   # The site point is as close to a reach vertex as to any other point on
+      #   # a reach. This occurs in 292 cases for tol=1m (and 355 cases for
+      #   # tol=10m, 281 for 0.1m, 277 for 0.01m, 276 for 0.001 down to 1e-12)
+      #   
+      #   # use the matched point
+      #   # site$point_ids <- site_sf$nearest_point_ids
+      #   
+      #   # use the nearest reach of those that drain to the matched point
+      #   upstream_reaches <- filter(reaches, end_pt == site_sf$nearest_vertex$point_ids)
+      #   closest_upstream_subseg <- upstream_reaches[st_nearest_feature(site_sf, upstream_reaches),]
+      #   site$subseg_id <- closest_upstream_subseg$subseg_id
+      #   
+      #   # revise the distances
+      #   site$bird_dist_to_subseg_m <- st_distance(site_sf, closest_upstream_subseg)[1,1] %>% units::drop_units()
+      #   site$fish_dist_to_outlet_m <- equidistance_tolerance_m # this is close enough, anyway
+      #   
+      # } else if(site_sf$bird_dist_to_subseg_m < site_sf$bird_dist_to_vertex_m) {
         # The nearest reach is closer than the nearest point. This occurs in
         # 4732 cases for tol=1m
         
         # calculate distances to the downstream and upstream vertices of the
         # matched reach. I tried using st_split but see
         # https://gis.stackexchange.com/questions/288570/find-nearest-point-along-polyline-using-sf-package-in-r
-        # -- that often doesn't actually split the line if you have to snap the
+        # -- that often doesn't actually split the line even if you snap the
         # point first
-        nearest_subseg <- filter(reaches, subseg_id == site$nearest_subseg_id)
-        vertex_upstream <- filter(vertices, point_ids == nearest_subseg$start_pt)
-        vertex_downstream <- filter(vertices, point_ids == nearest_subseg$end_pt)
-        subseg_as_points <- st_cast(st_geometry(nearest_subseg), 'POINT') # would work poorly if there were a big straight reach with no intermediate points
-        point_pos_in_subseg <- st_nearest_feature(site, subseg_as_points)
+        vertex_upstream <- filter(vertices, point_ids == site_sf$nearest_subseg$start_pt)
+        vertex_downstream <- filter(vertices, point_ids == site_sf$nearest_subseg$end_pt)
+        subseg_as_points <- st_cast(st_geometry(site_sf$nearest_subseg), 'POINT') # would work poorly if there were a big straight reach with no intermediate points
+        point_pos_in_subseg <- st_nearest_feature(site_sf, subseg_as_points)
         stopifnot(st_nearest_feature(vertex_upstream, subseg_as_points) == 1) # confirm that the points are listed upstream to downstream
-        fish_dist_upstream <- st_length(st_cast(st_combine(subseg_as_points[1:point_pos_in_subseg]), 'LINESTRING'))
-        fish_dist_downstream <- st_length(st_cast(st_combine(subseg_as_points[point_pos_in_subseg:length(subseg_as_points)]), 'LINESTRING'))
+        fish_dist_upstream_m <- st_combine(subseg_as_points[1:point_pos_in_subseg]) %>%
+          st_cast('LINESTRING') %>% st_length() %>% units::drop_units()
+        fish_dist_downstream_m <- st_combine(subseg_as_points[point_pos_in_subseg:length(subseg_as_points)]) %>%
+          st_cast('LINESTRING') %>% st_length() %>% units::drop_units()
         
         # Decide which reach to use. Because the model predicts values for an
         # the downstream point of each stream reach, we will sometimes want to
         # use the reach upstream of the matched reach (if the site point was
         # very close to the upstream point). So we need some conditionals.
-        if(fish_dist_downstream < fish_dist_upstream) {
-          # The nearest point (by fish distance) is downstream, so use that
-          # point and this reach
-          site$point_ids <- vertex_downstream$point_ids
-          site$subseg_id <- nearest_subseg$subseg_id
+        if(fish_dist_downstream_m < fish_dist_upstream_m) {
+          # The nearest point (by fish distance) is downstream, so use the current reach
+          # site$point_ids <- vertex_downstream$point_ids
+          site$subseg_id <- site_sf$nearest_subseg$subseg_id
+          site$bird_dist_to_subseg_m <- site_sf$bird_dist_to_subseg_m
+          site$fish_dist_to_outlet_m <- fish_dist_downstream_m
         } else {
           # The nearest point is upstream, so count the reaches immediately
           # upstream to decide what to do
           upstream_subsegs <- filter(reaches, end_pt == vertex_upstream$point_ids)
-          if(nrow(upstream_subsegs == 0)) {
+          if(nrow(upstream_subsegs) == 0) {
             # the current reach is a headwater, so use the downstream point and this reach
-            site$point_ids <- vertex_downstream$point_ids
-            site$subseg_id <- nearest_subseg$subseg_id
-            site$fish_dist_to_outlet <- units::set_units(fish_dist_downstream, m)
+            # site$point_ids <- vertex_downstream$point_ids
+            site$subseg_id <- site_sf$nearest_subseg$subseg_id
+            site$fish_dist_to_outlet_m <- fish_dist_downstream_m
           } else if(nrow(upstream_subsegs) == 1) {
             # The upstream reach exists and does not fork, so match to the
             # upstream point and the reach it drains
-            site$point_ids <- vertex_upstream$point_ids
+            # site$point_ids <- vertex_upstream$point_ids
             site$subseg_id <- upstream_subsegs$subseg_id
-            site$fish_dist_to_outlet <- units::set_units(-fish_dist_upstream, m)
+            site$fish_dist_to_outlet_m <- -fish_dist_upstream_m # negative distance to indicate upstream
           } else if(nrow(upstream_subsegs) > 1) {
             # The upstream reach does fork, so compare upstream and downstream distances
-            if((fish_dist_upstream*4) < fish_dist_downstream) {
+            if((fish_dist_upstream_m*4) < fish_dist_downstream_m) {
               # The upstream point is >4x closer than the downstream point, so
               # match to the upstream point and the closest reach it drains
-              closest_upstream_reach <- upstream_subsegs[st_nearest_feature(site, upstream_subsegs),]
-              site$point_ids <- vertex_upstream$point_ids
+              closest_upstream_reach <- upstream_subsegs[st_nearest_feature(site_sf, upstream_subsegs),]
+              # site$point_ids <- vertex_upstream$point_ids
               site$subseg_id <- closest_upstream_reach$subseg_id
-              site$fish_dist_to_outlet <- units::set_units(-fish_dist_upstream, m)
+              site$fish_dist_to_outlet_m <- -fish_dist_upstream_m
             } else {
               # The upstream point isn't close enough to justify using it, so
               # match to the downstream point and the matched reach
-              site$point_ids <- vertex_downstream$point_ids
-              site$subseg_id <- nearest_subseg$subseg_id
-              site$fish_dist_to_outlet <- units::set_units(fish_dist_downstream, m)
+              # site$point_ids <- vertex_downstream$point_ids
+              site$subseg_id <- site_sf$nearest_subseg$subseg_id
+              site$fish_dist_to_outlet_m <- fish_dist_downstream_m
             }
           }
         }
-        # calculate the as-a-bird-flies distance to the final selected reach
-        selected_reach <- filter(reaches, subseg_id == site$subseg_id)
-        site$bird_dist_to_subseg <- st_distance(site, selected_reach)
+        # regardless of whether we return the current or upstream subseg as the
+        # best match, the as-a-bird-flies distance to the river should still be
+        # the distance to the initial nearest reach, so that we can use this
+        # measure to decide whether we were able to snap the site to the river
+        # network successfully
+        site$bird_dist_to_subseg_m <- site_sf$bird_dist_to_subseg_m
         
-      } else {
-        browser()
-        stop('st_nearest_feature should never say a vertex is closer than the nearest reach; I must have misinterpreted the docs')
-      }
+      # } else {
+      #   stop('st_nearest_feature should never say a vertex is closer than the nearest reach; I must have misinterpreted the docs')
+      # }
+      
+      return(select(site, everything()))
     })
   
   return(crosswalk)
