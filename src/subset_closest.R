@@ -101,19 +101,9 @@ subset_closest <- function(sites, reaches, vertices) {
             site$subseg_id <- upstream_subsegs$subseg_id
             site$fish_dist_to_outlet_m <- -fish_dist_upstream_m # negative distance to indicate upstream
           } else if(nrow(upstream_subsegs) > 1) {
-            # The upstream reach does fork, so compare upstream and downstream distances
-            if((fish_dist_upstream_m*4) < fish_dist_downstream_m) {
-              # The upstream point is >4x closer than the downstream point, so
-              # match to the upstream point and the closest reach it drains
-              closest_upstream_reach <- upstream_subsegs[st_nearest_feature(site_sf, upstream_subsegs),]
-              site$subseg_id <- closest_upstream_reach$subseg_id
-              site$fish_dist_to_outlet_m <- -fish_dist_upstream_m
-            } else {
-              # The upstream point isn't close enough to justify using it, so
-              # match to the downstream point and the matched reach
-              site$subseg_id <- site_sf$nearest_subseg$subseg_id
-              site$fish_dist_to_outlet_m <- fish_dist_downstream_m
-            }
+            # The upstream reach does fork, so just stick to matching to the current reach
+            site$subseg_id <- site_sf$nearest_subseg$subseg_id
+            site$fish_dist_to_outlet_m <- fish_dist_downstream_m
           }
         }
         # Regardless of whether we return the current or upstream subseg as the
