@@ -54,7 +54,9 @@ system.time({ # 97 seconds
   # (the algorithm will have matched to the first version of that site, probably the wqp USGS-NY one)
 })
 
-crosswalk_site_reach <- left_join(drb_sites, crosswalk, by='site_id')
+# add geospatial info (drb_sites) and seg_id_nat (drb_net$edges)
+crosswalk_site_reach <- left_join(drb_sites, crosswalk, by='site_id') %>%
+  left_join(st_drop_geometry(select(drb_net$edges, subseg_id, seg_id_nat)), by='subseg_id')
 saveRDS(crosswalk_site_reach, 'out/crosswalk_site_reach.rds')
 
 #### Explore the site lists ####

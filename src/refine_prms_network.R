@@ -254,9 +254,17 @@ reaches_updown %>%
   mutate(position = ifelse(is.na(next_subseg), 'outlet', ifelse(is.na(prev_subseg), 'headwater', 'middle'))) %>%
   ggplot() + geom_sf(aes(color=position), fill=NA) + theme_bw()
 
+# add seg_id_nat back into the reaches table
+reach_net_edges_nat <- reach_net_edges %>%
+  mutate(last_in_seg = mapply(function(ss_s, e_p) { grepl(sprintf('(^|;)%dd($|;)', ss_s), e_p) }, subseg_seg, end_pt)) %>%
+  left_join(
+    gf_reaches %>% st_drop_geometry %>% select(seg_id_nat, seg_id),
+    by=c('subseg_seg'='seg_id')) %>%
+  mutate(seg_id_nat = ifelse(last_in_seg, seg_id_nat, NA)) %>%
+  select(-last_in_seg)
 # combine reach_net_edges and reach_net_vertices into a final gloriously complete list for the sake of export
 reach_net <- list(
-  edges = reach_net_edges,
+  edges = reach_net_edges_nat,
   vertices = reach_net_vertices)
 saveRDS(reach_net, 'out/reach_network.rds')
 
