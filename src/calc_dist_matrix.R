@@ -3,7 +3,7 @@ library(sf)
 library(igraph)
 
 # Read in network from refine_prms_network.R
-reach_net <- saveRDS('out/reach_network.rds')
+reach_net <- readRDS('out/reach_network.rds')
 
 # Use igraph to compute a matrix of distances (in meters)
 graph <- reach_net$edges %>%
