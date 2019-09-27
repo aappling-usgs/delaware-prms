@@ -6,11 +6,20 @@ library(smoothr)
 #### Load site information ####
 
 # Read in the revised network and boundary
-drb_net <- readRDS('out/reach_network.rds')
+drb_net <- readRDS('out/network_full.rds')
 drb_boundary <- sf::read_sf('out/drb_boundary/drb_boundary.shp')
 
-# Read in the inventories of temperature observation sites
 data_snapshot_path <- 'data/190912-2wp-temp-observations'
+
+# Download the inventories of temperature observation sites
+# library(googledrive)
+# drive_ls(as_id('1YGnSa3zcgmvDQ7omldAL0tQG-B_Fdj4Y')) # 1_wqp_pull/inout contents
+# drive_download(as_id('1XBuCF8kvDzFQllpTJffXZ4DyT_cZhHHK'), file.path(data_snapshot_path, '1_wqp_pull/inout/wqp_inventory.feather'), overwrite=TRUE)
+# drive_ls(as_id('14UkpswH0t7Q-9yjrX90ukkQK8RNbmsVG')) # 2_nwis_pull/inout contents
+# drive_download(as_id('1y93J3_dv2yfvyPu8radDzrnfwBIXE24F'), file.path(data_snapshot_path, '2_nwis_pull/inout/nwis_dv_inventory.feather'), overwrite=TRUE)
+# drive_download(as_id('1NeHSvADobhIITtqnFcE5jRdb35EYw15R'), file.path(data_snapshot_path, '2_nwis_pull/inout/nwis_uv_inventory_reduced.feather'), overwrite=TRUE)
+
+# Read in the inventories of temperature observation sites
 wqp_partitions <- feather::read_feather(file.path(data_snapshot_path, '1_wqp_pull/inout/wqp_pull_partitions.feather'))
 wqp_sites <- feather::read_feather(file.path(data_snapshot_path, '1_wqp_pull/inout/wqp_inventory.feather')) %>%
   dplyr::left_join(wqp_partitions, by='MonitoringLocationIdentifier') %>%

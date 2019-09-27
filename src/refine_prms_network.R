@@ -266,7 +266,7 @@ reach_net_edges_nat <- reach_net_edges %>%
 reach_net <- list(
   edges = reach_net_edges_nat,
   vertices = reach_net_vertices)
-saveRDS(reach_net, 'out/reach_network.rds')
+saveRDS(reach_net, 'out/network_full.rds')
 
 # visualize some more
 ggplot(mutate(reach_net$edges, length_m=units::drop_units(subseg_length))) +

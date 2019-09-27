@@ -18,8 +18,8 @@ library(sf)
 #' @return data.frame of site info: MonitoringLocationIdentifier, seg_id_nat,
 #'   lat, lon, and distance from site lat/lon to centroid of the reach segment
 #' @examples
-#' reaches <- readRDS('out/reach_network.rds')$edges
-#' vertices <- readRDS('out/reach_network.rds')$vertices
+#' reaches <- readRDS('out/network_full.rds')$edges
+#' vertices <- readRDS('out/network_full.rds')$vertices
 #' sites <- drb_sites # build drb_sites in map_sites_to_reaches.R
 subset_closest <- function(sites, reaches, vertices) {
   
