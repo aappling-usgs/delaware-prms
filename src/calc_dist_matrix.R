@@ -3,14 +3,35 @@ library(sf)
 library(igraph)
 
 # Use igraph to compute a matrix of distances (in meters)
-calc_dist_matrices <- function(edges) {
-  graph <- edges %>%
-    st_set_geometry(NULL) %>%
-    select(start_pt, end_pt, subseg_id, subseg_length) %>%
-    igraph::graph_from_data_frame(directed = TRUE) # df must contain "a symbolic edge list in the first two columns. Additional columns are considered as edge attributes"
-  dists_complete <- distances(graph, weights = edge.attributes(graph)$subseg_length, mode='all') # symmetric
-  dists_downstream <- distances(graph, weights = edge.attributes(graph)$subseg_length, mode='out') # shortest paths FROM each vertex.
-  dists_upstream <- distances(graph, weights = edge.attributes(graph)$subseg_length, mode='in') # shortest paths TO each vertex (flowing upstream only)
+calc_dist_matrices <- function(network, labels=c('subseg_id','seg_id_nat')) {
+  labels <- match.arg(labels)
+  
+  # recombine the reach information so that what I was calling the "edges" of
+  # the river network (the river reaches) become the vertices of the igraph
+  # object, where the distance from one vertex to the next is the distance (or
+  # travel time) along the second vertex=reach
+  edges <- network$edges %>%
+    st_drop_geometry() %>%
+    select(subseg_id, to_subseg) %>%
+    left_join(select(st_set_geometry(network$edges, NULL), subseg_id, subseg_length), by=c('to_subseg'='subseg_id')) %>%
+    rename(from_reach=subseg_id, to_reach=to_subseg, reach_length=subseg_length) %>%
+    # remove the 7 rows where a subseg_id empties to NA (the river outlets); the subseg_ids are still present in the network as to_subsegs
+    filter(!is.na(to_reach)) 
+  if(labels=='seg_id_nat') {
+    subseg_seg_map <- network$edges %>% st_drop_geometry() %>% select(subseg_id, seg_id_nat)
+    edges <- edges %>%
+      mutate(
+        from_reach = subseg_seg_map[match(from_reach, subseg_seg_map$subseg_id), ]$seg_id_nat,
+        to_reach = subseg_seg_map[match(to_reach, subseg_seg_map$subseg_id), ]$seg_id_nat)
+    if(!all(complete.cases(edges))) {
+      stop('labels=seg_id_nat but not all reaches have a seg_id_nat assigned')
+    }
+  }
+  graph <-  igraph::graph_from_data_frame(edges, directed = TRUE) # df must contain "a symbolic edge list in the first two columns. Additional columns are considered as edge attributes"
+  
+  dists_complete <- distances(graph, weights = edge.attributes(graph)$reach_length, mode='all') # symmetric
+  dists_downstream <- distances(graph, weights = edge.attributes(graph)$reach_length, mode='out') # shortest paths FROM each vertex.
+  dists_upstream <- distances(graph, weights = edge.attributes(graph)$reach_length, mode='in') # shortest paths TO each vertex (flowing upstream only)
   dists_updown <- dists_downstream
   for(i in 1:nrow(dists_downstream)) {
     for(j in 1:ncol(dists_downstream)) {
@@ -22,34 +43,36 @@ calc_dist_matrices <- function(edges) {
   return(list(complete=dists_complete, downstream=dists_downstream, upstream=dists_upstream, updown=dists_updown))
 }
 
-dist_heatmap <- function(dat, title, save_as) {
+dist_heatmap <- function(dat, labels=c('subseg_id','seg_id_nat'), title, save_as) {
+  labels <- match.arg(labels)
   dat_df <- as_tibble(dat) %>%
-    mutate(start_pt=rownames(dat)) %>%
-    gather('end_pt', 'dist_m', -start_pt) %>%
-    mutate(
-      start_pt = sapply(strsplit(start_pt, ';'), function(splits) splits[1]),
-      end_pt = sapply(strsplit(end_pt, ';'), function(splits) splits[1]))
-  point_levels <- unique(c(dat_df$start_pt, dat_df$end_pt))
-  point_order <- order(sapply(strsplit(point_levels, '(u|d)(;)*'), function(splits) as.integer(splits[1])))
+    mutate(from_reach=rownames(dat)) %>%
+    gather('to_reach', 'dist_m', -from_reach)
+  point_levels <- unique(c(dat_df$from_reach, dat_df$to_reach))
+  if(labels == 'subseg_id') {
+    point_order <- point_levels %>% strsplit(split='_') %>% sapply(function(vals) as.numeric(vals[1]) + as.numeric(vals[2])/10) %>% order
+  } else {
+    point_order <- point_levels %>% order
+  }
   point_levels <- point_levels[point_order]
   dat_df <- dat_df %>%
     mutate(
-      start_pt = ordered(start_pt, levels=rev(point_levels)),
-      end_pt = ordered(end_pt, levels=point_levels))
-  g <- ggplot(dat_df, aes(y=start_pt, x=end_pt)) + 
+      from_reach = ordered(from_reach, levels=rev(point_levels)),
+      to_reach = ordered(to_reach, levels=point_levels))
+  g <- ggplot(dat_df, aes(y=from_reach, x=to_reach)) + 
     geom_tile(aes(fill = dist_m), color = NA) +
-    if(any(dat < 0)) {
+    (if(any(dat < 0)) {
       scale_fill_gradient2('Distance (m)', na.value='#192f41')
     } else {
       scale_fill_gradient('Distance (m)', low = "#ffffff", high = "#396a93", na.value='#192f41')
-    } +
+    }) +
     scale_x_discrete(position = 'top') +
     xlab('End Point') + ylab('Start Point') +
     theme(panel.grid = element_blank(),
-     axis.ticks = element_blank(),
-     axis.text = element_blank()) +
-     # axis.text = element_text(size = 9, color='grey50'),
-     # axis.text.x = element_text(angle = 90, hjust = 0)) +
+          axis.ticks = element_blank(),
+          axis.text = element_blank()) +
+          # axis.text = element_text(size = 9, color='grey50'),
+          # axis.text.x = element_text(angle = 90, hjust = 0)) +
     coord_equal() +
     ggtitle(title)
   if(!missing(save_as)) {
@@ -59,14 +82,21 @@ dist_heatmap <- function(dat, title, save_as) {
 }
 
 # visualize some more more
-plot_dists <- function(start_pt, dist_mat, net, title, save_as) {
-  dists_from_start <- dist_mat[start_pt,]/1000
-  pt_dists <- mutate(net$vertices, dist_from_start=dists_from_start[point_ids]) %>%
-    filter(is.finite(dist_from_start))
-  g <- ggplot(net$edges) +
+plot_dists <- function(from_reach, dist_mat, labels=c('subseg_id','seg_id_nat'), network, title, save_as) {
+  labels <- match.arg(labels)
+  dists_from_start <- dist_mat[as.character(from_reach),]/1000
+  pt_dist_reaches <- mutate(network$edges, reach_id = if(labels == 'subseg_id') subseg_id else seg_id_nat) %>%
+    mutate(dist_from_start = dists_from_start[as.character(reach_id)]) %>%
+    filter(is.finite(dist_from_start) | reach_id == from_reach)
+  pt_dist_vertices <- network$vertices %>%
+    right_join(pt_dist_reaches %>% st_drop_geometry(), by=c('point_ids'='end_pt')) %>%
+    select(reach_id, dist_from_start)
+  g <- ggplot(network$edges) +
     geom_sf(color='lightgrey') +
-    geom_sf(data=pt_dists, aes(color=dist_from_start)) +
-    geom_sf(data=filter(net$vertices, point_ids==start_pt), color='red') +
+    geom_sf(data=pt_dist_reaches, aes(color=dist_from_start)) +
+    geom_sf(data=pt_dist_vertices, aes(color=dist_from_start)) +
+    geom_sf(data=filter(pt_dist_reaches, reach_id==from_reach), color='red') +
+    geom_sf(data=filter(pt_dist_vertices, reach_id==from_reach), color='red') +
     theme_bw() +
     scale_color_continuous('Distance to\nred point (km)') +
     ggtitle(title)
