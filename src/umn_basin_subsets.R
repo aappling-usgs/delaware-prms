@@ -75,7 +75,7 @@ explore_subnetwork <- function(subnet, crosswalk, drb_net) {
     ggtitle('Filtered by bird and fish distance; showing observation counts')
   print(g)
   
-  message(sprintf('%d edges, %d vertices', nrow(subnet$edges), nrow(subnet$vertices)))
+  message(sprintf('%d edges, %d vertices', nrow(subnet$vertices), nrow(subnet$edges)))
   
   obs_count <- subnet$edges %>%
     st_drop_geometry() %>%
