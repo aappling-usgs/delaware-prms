@@ -108,13 +108,15 @@ plot_dists <- function(from_reach, dist_mat, labels=c('subseg_id','seg_id_nat'),
 
 # save distance matrices in numpy format
 save_dist_matrices <- function(dist_mat_list, out_file) {
+  stopifnot(rownames(dist_mat_list$upstream) == colnames(dist_mat_list$updown))
   np <- reticulate::import('numpy')
   np$savez_compressed(
     file=out_file,
     downstream=dist_mat_list$downstream,
     upstream=dist_mat_list$upstream,
     complete=dist_mat_list$complete,
-    updown=dist_mat_list$updown)
+    updown=dist_mat_list$updown,
+    seg_id_nat=rownames(dist_mat_list$downstream))
   # R access examples:
   # loaded <- np$load('out/dists.npz')
   # loaded$files
